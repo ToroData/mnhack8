@@ -110,6 +110,18 @@ static MPI_Comm SOLVER_COMM;
     CUDA_CHECK(cudaDeviceSynchronize());                                       \
 } while (0)
 
+// Same launch-error check, without the device-wide synchronize. Everything in
+// this file runs on the default stream, so launch order == execution order is
+// already guaranteed by CUDA itself; an explicit cudaDeviceSynchronize() is
+// only needed where the host is about to read a result via cudaMemcpy or
+// otherwise wait on the device (both of which already block). Use this on the
+// hot elementwise/reduction kernels inside the CG loop (pcg_solve, dot,
+// apply_preconditioner) where the redundant full-device stall costs the most
+// per iteration; leave CUDA_CHECK_LAUNCH() on setup/IC/IO-boundary launches.
+#define CUDA_CHECK_LAUNCH_ASYNC() do {                                         \
+    CUDA_CHECK(cudaPeekAtLastError());                                        \
+} while (0)
+
 // -----------------------------------------------------------------------------
 // Grid descriptor 
 // -----------------------------------------------------------------------------
@@ -899,7 +911,7 @@ public:
 
     void apply_preconditioner(const real_t* d_r, real_t* d_z) {
         jacobi_apply_kernel<<<blocks_node, threads_node>>>(d_r, d_diag, d_z, g.nnodes_local);
-        CUDA_CHECK_LAUNCH();
+        CUDA_CHECK_LAUNCH_ASYNC();
     }
 
     // b = M T^n + dt F. Level H (if armed) fires in this call's halo exchange.
@@ -907,16 +919,16 @@ public:
         apply_operator(d_Tn, d_b, 0.0, false);
         if (!g.verify && !g.no_source) {
             axpy_kernel<<<blocks_node, threads_node>>>(dt, d_F, d_b, g.nnodes_local);
-            CUDA_CHECK_LAUNCH();
+            CUDA_CHECK_LAUNCH_ASYNC();
         }
     }
 
     real_t dot(const real_t* d_x, const real_t* d_y) {
         owned_dot_partial_kernel<<<blocks_node, threads_node, threads_node*sizeof(real_t)>>>(
             d_x, d_y, d_partial, g);
-        CUDA_CHECK_LAUNCH();
+        CUDA_CHECK_LAUNCH_ASYNC();
         reduce_partials_kernel<<<1, 1024, 1024*sizeof(real_t)>>>(d_partial, blocks_node, d_dot_result);
-        CUDA_CHECK_LAUNCH();
+        CUDA_CHECK_LAUNCH_ASYNC();
         real_t local, global;
         CUDA_CHECK(cudaMemcpy(&local, d_dot_result, sizeof(real_t), cudaMemcpyDeviceToHost));
         MPI_Allreduce(&local, &global, 1, MPI_REAL_T, MPI_SUM, SOLVER_COMM);
@@ -933,13 +945,13 @@ int pcg_solve(HeatOperator& op, const real_t* d_b, real_t* d_x, int max_iter, re
     long n = op.g.nnodes_local; int tn = op.threads_node; long bn = op.blocks_node;
     (void)tn; (void)bn;
     op.apply_matvec(d_x, d_Ap);                       // level R fires here if armed
-    copy_kernel<<<bn, tn>>>(d_b, d_r, n); CUDA_CHECK_LAUNCH();
-    axpy_kernel<<<bn, tn>>>(-1.0, d_Ap, d_r, n); CUDA_CHECK_LAUNCH();
+    copy_kernel<<<bn, tn>>>(d_b, d_r, n); CUDA_CHECK_LAUNCH_ASYNC();
+    axpy_kernel<<<bn, tn>>>(-1.0, d_Ap, d_r, n); CUDA_CHECK_LAUNCH_ASYNC();
     real_t bnorm = op.norm2(d_b);
     if (bnorm < 1e-30) bnorm = 1.0;
     if (diag_log) fprintf(diag_log, "0,%.10e,,\n", (double)(op.norm2(d_r) / bnorm));
     op.apply_preconditioner(d_r, d_z);
-    copy_kernel<<<bn, tn>>>(d_z, d_p, n); CUDA_CHECK_LAUNCH();
+    copy_kernel<<<bn, tn>>>(d_z, d_p, n); CUDA_CHECK_LAUNCH_ASYNC();
     real_t rho = op.dot(d_r, d_z);
     int iter = 0;
     for (iter = 0; iter < max_iter; ++iter) {
@@ -947,8 +959,8 @@ int pcg_solve(HeatOperator& op, const real_t* d_b, real_t* d_x, int max_iter, re
         real_t pAp = op.dot(d_p, d_Ap);
         if (fabs(pAp) < 1e-30) break;
         real_t alpha = rho / pAp;
-        axpy_kernel<<<bn, tn>>>( alpha, d_p,  d_x, n); CUDA_CHECK_LAUNCH();
-        axpy_kernel<<<bn, tn>>>(-alpha, d_Ap, d_r, n); CUDA_CHECK_LAUNCH();
+        axpy_kernel<<<bn, tn>>>( alpha, d_p,  d_x, n); CUDA_CHECK_LAUNCH_ASYNC();
+        axpy_kernel<<<bn, tn>>>(-alpha, d_Ap, d_r, n); CUDA_CHECK_LAUNCH_ASYNC();
         real_t rnorm = op.norm2(d_r);
         bool conv = (rnorm / bnorm < tol);
         real_t beta = 0.0;
@@ -956,7 +968,7 @@ int pcg_solve(HeatOperator& op, const real_t* d_b, real_t* d_x, int max_iter, re
             op.apply_preconditioner(d_r, d_z);
             real_t rho_new = op.dot(d_r, d_z);
             beta = rho_new / rho;
-            aypx_kernel<<<bn, tn>>>(beta, d_z, d_p, n); CUDA_CHECK_LAUNCH();
+            aypx_kernel<<<bn, tn>>>(beta, d_z, d_p, n); CUDA_CHECK_LAUNCH_ASYNC();
             rho = rho_new;
         }
         // beta is 0 (harmless placeholder) on the final, converged iteration --
