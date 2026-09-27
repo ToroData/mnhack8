@@ -803,7 +803,7 @@ public:
         long b = (face + t - 1) / t;
         if (g.rank > 0)             pack_face_kernel<<<b, t>>>(d_v, d_send_l, g, 0);
         if (g.rank < g.nprocs - 1)  pack_face_kernel<<<b, t>>>(d_v, d_send_r, g, g.nx_local);
-        CUDA_CHECK_LAUNCH();
+        CUDA_CHECK_LAUNCH_ASYNC();   // the cudaMemcpy(D2H) two lines below already blocks
         if (g.rank > 0)
             CUDA_CHECK(cudaMemcpy(h_send_l, d_send_l, face * sizeof(real_t), cudaMemcpyDeviceToHost));
         if (g.rank < g.nprocs - 1)
@@ -835,33 +835,38 @@ public:
             CUDA_CHECK(cudaMemcpy(d_recv_r, h_recv_r, face * sizeof(real_t), cudaMemcpyHostToDevice));
             unpack_face_add_kernel<<<b, t>>>(d_v, d_recv_r, g, g.nx_local);
         }
-        CUDA_CHECK_LAUNCH();
+        CUDA_CHECK_LAUNCH_ASYNC();   // default stream: order vs. subsequent launches is guaranteed;
+                                      // next real host readback is a blocking cudaMemcpy further downstream
     }
 
     // ---- operator -----------------------------------------------------------
     // y = (M + dt_eff K) x, with halo sum and Dirichlet projection.
     // allow_fi: whether a pending level-R injection may fire in this call.
+    // Called every CG iteration via apply_matvec() -- same async-check reasoning
+    // as pcg_solve()/dot()/apply_preconditioner() applies here: default stream,
+    // no host readback until a later blocking cudaMemcpy, so cudaDeviceSynchronize
+    // after each of these launches is redundant.
     void apply_operator(const real_t* d_x, real_t* d_y, real_t dt_eff, bool allow_fi, bool project = true) {
         zero_kernel<<<blocks_node, threads_node>>>(d_y, g.nnodes_local);
-        CUDA_CHECK_LAUNCH();
+        CUDA_CHECK_LAUNCH_ASYNC();
         FIConfig f = fi;
         if (!allow_fi) f.armed = 0;
         if (!colored) {
             if (kernel_fast) operator_kernel<1><<<blocks_elem, threads_elem>>>(d_x, d_y, g, dt_eff, f, -1);
             else             operator_kernel<0><<<blocks_elem, threads_elem>>>(d_x, d_y, g, dt_eff, f, -1);
-            CUDA_CHECK_LAUNCH();
+            CUDA_CHECK_LAUNCH_ASYNC();
         } else {
             for (int c = 0; c < 8; ++c) {
                 if (kernel_fast) operator_kernel<1><<<color_blocks[c], threads_elem>>>(d_x, d_y, g, dt_eff, f, c);
                 else             operator_kernel<0><<<color_blocks[c], threads_elem>>>(d_x, d_y, g, dt_eff, f, c);
-                CUDA_CHECK_LAUNCH();
+                CUDA_CHECK_LAUNCH_ASYNC();
             }
         }
         if (allow_fi && fi.armed && fi.level == 2) fi.armed = 0;   // one-shot
         halo_exchange_sum(d_y);
         if (project) {
             apply_dirichlet_value_kernel<<<blocks_node, threads_node>>>(d_y, g, 0.0);
-            CUDA_CHECK_LAUNCH();
+            CUDA_CHECK_LAUNCH_ASYNC();
         }
         if (detect && project) {
             // D1: 1_int^T y  vs  w^T x, scaled by ||w|| ||x|| (Cauchy-Schwarz bound)
