@@ -87,9 +87,33 @@
 #include <vector>
 #include <string>
 #include <algorithm>
+#include <cstdint>
+#include <nvtx3/nvToolsExt.h>
 
 typedef double real_t;
 #define MPI_REAL_T MPI_DOUBLE
+
+// Macro utility for NVTX ranges
+inline constexpr uint32_t colors[] = {0xff00ff00, 0xff0000ff, 0xffffff00, 0xffff00ff, 0xff00ffff, 0xffff0000, 0xffffffff};
+inline constexpr int num_colors = sizeof(colors) / sizeof(uint32_t);
+
+// Push function for starting NVTX ranges
+#define PUSH_RANGE(name, cid)                                  \
+    do {                                                   \
+        int color_id = cid;                                \
+        color_id = color_id % num_colors;                  \
+        nvtxEventAttributes_t eventAttrib = {0};           \
+        eventAttrib.version = NVTX_VERSION;                \
+        eventAttrib.size = NVTX_EVENT_ATTRIB_STRUCT_SIZE;  \
+        eventAttrib.colorType = NVTX_COLOR_ARGB;           \
+        eventAttrib.color = colors[color_id];              \
+        eventAttrib.messageType = NVTX_MESSAGE_TYPE_ASCII; \
+        eventAttrib.message.ascii = name;                  \
+        nvtxRangePushEx(&eventAttrib);                     \
+    } while (0)
+
+// Pop function for ending NVTX ranges
+#define POP_RANGE() nvtxRangePop()
 
 // All solver-internal communication goes through SOLVER_COMM. Without --qrank
 // it is SOLVER_COMM; with --qrank the last world rank is a Python quantum
@@ -123,7 +147,7 @@ static MPI_Comm SOLVER_COMM;
 } while (0)
 
 // -----------------------------------------------------------------------------
-// Grid descriptor 
+// Grid descriptor
 // -----------------------------------------------------------------------------
 struct Grid {
     int  nx, ny, nz;
