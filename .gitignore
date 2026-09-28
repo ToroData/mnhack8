@@ -69,3 +69,10 @@ env/
 # Plots regenerable from CSV and real measurement data (tracked)
 results/**/*.png
 !results/verify/verify.csv
+results/
+out_before*/
+out_after*/
+*.nsys-rep
+*.sqlite
+fields/*.json
+*.patch
