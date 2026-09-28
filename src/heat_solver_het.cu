@@ -709,6 +709,7 @@ public:
 
     // ---- fields -------------------------------------------------------------
     void load_fields(const char* prefix) {
+        PUSH_RANGE("load_fields_H2D", CAT_SETUP);
         long ne_slab = (long)g.nx_local * g.ny * g.nz;
         long offset  = (long)g.ix_start * g.ny * g.nz;
         std::vector<real_t> h_k(ne_slab), h_rhoc(ne_slab);
