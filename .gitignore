@@ -68,10 +68,11 @@ env/
 
 # ===== Project-specific data policy =====
 # Field-generator binary output (regenerable from seed — see docs/appendices/materials.tex)
-*.bin
+# *.bin
 # Plots regenerable from CSV and real measurement data (tracked)
 results/**/*.png
 !results/verify/verify.csv
+!results/ensemble_N32/fields/ln32_s0.5_seed1_meta.json
 results/
 out_before*/
 out_after*/
