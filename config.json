@@ -1,0 +1,22 @@
+{
+  "configurations": [
+    {
+      "fi": "LEVEL STEP TARGET BIT",
+      "fi_rank": "R",
+      "snap": "S",
+      "tag": "NAME",
+      "kernel": "gauss|fast",
+      "scatter": "atomic|colored",
+      "thr": "X",
+      "reproject-bc": true,
+      "detect": false,
+      "verify": true,
+      "no_source": true,
+      "ic": "zero|gaussian",
+      "dump_snaps": true,
+      "diag_cg": "FILE",
+      "qrank": true,
+      "qblock": "X0 Y0 Z0 m"
+    }
+  ]
+}
