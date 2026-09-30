@@ -87,6 +87,7 @@
 #include <vector>
 #include <string>
 #include <algorithm>
+#include <cstdint>
 #include <nvtx3/nvToolsExt.h>
 
 
@@ -891,11 +892,12 @@ public:
 
     // ---- halo ---------------------------------------------------------------
     void halo_exchange_sum(real_t* d_v) {
-        PUSH_RANGE("halo exchange", CAT_HALO);
         if (g.nprocs == 1) return;
+        PUSH_RANGE("halo_exchange", CAT_HALO);
         long face = (long)g.nny * g.nnz;
         int t = 256;
         long b = (face + t - 1) / t;
+        PUSH_RANGE("halo:pack_D2H", CAT_HALO);
         if (g.rank > 0)             pack_face_kernel<<<b, t>>>(d_v, d_send_l, g, 0);
         if (g.rank < g.nprocs - 1)  pack_face_kernel<<<b, t>>>(d_v, d_send_r, g, g.nx_local);
         CUDA_CHECK_LAUNCH_ASYNC();   // the cudaMemcpy(D2H) two lines below already blocks
@@ -923,9 +925,9 @@ public:
             MPI_Isend(h_send_r, face, MPI_REAL_T, g.rank+1, 0, SOLVER_COMM, &reqs[nr++]);
         }
         PUSH_RANGE("halo:mpi_waitall", CAT_HALO);
+        MPI_Waitall(nr, reqs, MPI_STATUSES_IGNORE);
         POP_RANGE();
         PUSH_RANGE("halo:unpack_H2D", CAT_HALO);
-        MPI_Waitall(nr, reqs, MPI_STATUSES_IGNORE);
         if (g.rank > 0) {
             CUDA_CHECK(cudaMemcpy(d_recv_l, h_recv_l, face * sizeof(real_t), cudaMemcpyHostToDevice));
             unpack_face_add_kernel<<<b, t>>>(d_v, d_recv_l, g, 0);
@@ -1036,7 +1038,10 @@ public:
     }
 
     real_t dot(const real_t* d_x, const real_t* d_y) {
-        return dotA.dot(d_x, d_y, g, blocks_node, threads_node);
+        PUSH_RANGE("dot", CAT_DOT);
+        real_t result = dotA.dot(d_x, d_y, g, blocks_node, threads_node);
+        POP_RANGE();
+        return result;
         // Previous two-stage version (2 kernels + blocking cudaMemcpy):
         // owned_dot_partial_kernel<<<blocks_node, threads_node, threads_node*sizeof(real_t)>>>(
         //     d_x, d_y, d_partial, g);
